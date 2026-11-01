@@ -106,16 +106,36 @@ function classify(net: number, dist: number, grade: number, threshold: number, f
 
 /** Plateau band as a fraction of the hysteresis threshold (see buildSegments). */
 const PLATEAU_BAND_FRACTION = 1 / 3;
+/**
+ * A flat stretch made only of plateau trims must be at least this long (horizontal metres) OR last at
+ * least MIN_PLATEAU_FLAT_SEC of moving time to stand as its own 'flat' segment; shorter ones (e.g. the
+ * rounded top of a summit) are given back to the climb / descent they were trimmed from.
+ */
+export const MIN_PLATEAU_FLAT_M = 500;
+export const MIN_PLATEAU_FLAT_SEC = 180;
+
+interface Piece {
+  start: number;
+  direction: Direction;
+  /** True if this piece is a leading/trailing plateau trimmed off a hysteresis run. */
+  plateau: boolean;
+  /** Direction the piece takes if the plateau trim is undone. */
+  runDirection: Direction;
+}
 
 /**
  * Build contiguous segments from smoothed altitude:
- *  1. hysteresis turning points split the track into alternating runs;
+ *  1. hysteresis turning points split the track into alternating runs (boundaries sit on the extreme
+ *     sample: summit or valley bottom);
  *  2. each run's leading / trailing plateau (samples staying within threshold/3 of the run's start / end
- *     altitude) is split off as a candidate piece — this separates e.g. a flat valley floor from the
- *     descent before it and the climb after it, and a flat finish from the last descent; a candidate
- *     piece is kept only if it classifies as flat, otherwise it stays part of its run;
- *  3. each piece is classified up/down/flat (|avgGrade| < flatGradePct => flat);
- *  4. adjacent pieces of the same direction are merged.
+ *     altitude) is split off as a candidate piece if it classifies as flat — this separates e.g. a flat
+ *     valley floor from the descent before it and the climb after it, and a flat finish from the last
+ *     descent;
+ *  3. consecutive flat pieces that consist only of plateau trims are kept only if they are long enough
+ *     (>= MIN_PLATEAU_FLAT_M or >= MIN_PLATEAU_FLAT_SEC); otherwise each piece reverts to its own run, so
+ *     a short rounded summit does not become a sliver and the climb ends / descent starts at the extreme;
+ *  4. remaining pieces are classified up/down/flat (|avgGrade| < flatGradePct => flat) and adjacent
+ *     pieces of the same direction are merged.
  * Known limitation: a plateau in the MIDDLE of a run (climb, flat, climb with no reversal >= threshold)
  * stays inside the run.
  */
@@ -130,17 +150,8 @@ export function buildSegments(s: Series, threshold: number, flatGradePct: number
     return classify(st.net, st.dist, st.avgGrade, threshold, flatGradePct);
   };
 
-  const pieces: { start: number; direction: Direction }[] = [];
-  const push = (start: number, direction: Direction) => {
-    const last = pieces[pieces.length - 1];
-    if (last && last.direction === direction) return;
-    if (last && last.start === start) {
-      last.direction = direction;
-      return;
-    }
-    pieces.push({ start, direction });
-  };
-
+  // 1-2: runs and plateau trims.
+  const pieces: Piece[] = [];
   for (let k = 0; k < turns.length; k++) {
     const runStart = turns[k];
     const runEnd = k + 1 < turns.length ? turns[k + 1] : n - 1;
@@ -153,15 +164,41 @@ export function buildSegments(s: Series, threshold: number, flatGradePct: number
     const trailFlat = q < runEnd && q > runStart && classifySpan(q, runEnd) === 'flat';
     const coreStart = leadFlat ? p : runStart;
     const coreEnd = trailFlat ? q : runEnd;
-    if (leadFlat) push(runStart, 'flat');
-    if (coreEnd > coreStart) push(coreStart, classifySpan(coreStart, coreEnd));
-    if (trailFlat) push(q, 'flat');
-    if (pieces.length === 0) push(runStart, classifySpan(runStart, runEnd));
+    const runDirection = coreEnd > coreStart ? classifySpan(coreStart, coreEnd) : classifySpan(runStart, runEnd);
+    if (leadFlat) pieces.push({ start: runStart, direction: 'flat', plateau: true, runDirection });
+    if (coreEnd > coreStart || (!leadFlat && !trailFlat)) {
+      pieces.push({ start: coreStart, direction: runDirection, plateau: false, runDirection });
+    }
+    if (trailFlat) pieces.push({ start: q, direction: 'flat', plateau: true, runDirection });
   }
-  // A piece starting at the last point (zero-length span) adds nothing: drop it.
-  while (pieces.length > 1 && pieces[pieces.length - 1].start >= n - 1) pieces.pop();
-  // Re-merge in case dropping / relabelling created same-direction neighbours.
-  const merged = pieces.filter((pc, i) => i === 0 || pc.direction !== pieces[i - 1].direction);
+
+  // 3: drop short flat groups made only of plateau trims.
+  const pieceEnd = (i: number) => (i + 1 < pieces.length ? pieces[i + 1].start : n - 1);
+  for (let i = 0; i < pieces.length; ) {
+    if (pieces[i].direction !== 'flat') {
+      i++;
+      continue;
+    }
+    let j = i;
+    let allPlateau = true;
+    while (j < pieces.length && pieces[j].direction === 'flat') allPlateau = pieces[j++].plateau && allPlateau;
+    const a = pieces[i].start;
+    const b = pieceEnd(j - 1);
+    const longEnough =
+      s.distance[b] - s.distance[a] >= MIN_PLATEAU_FLAT_M || s.movingTime[b] - s.movingTime[a] >= MIN_PLATEAU_FLAT_SEC;
+    if (allPlateau && !longEnough) {
+      for (let k = i; k < j; k++) pieces[k].direction = pieces[k].runDirection;
+    }
+    i = j;
+  }
+
+  // 4: drop zero-length pieces (start at the last point, or duplicated starts) and merge.
+  const merged: { start: number; direction: Direction }[] = [];
+  for (const pc of pieces) {
+    const last = merged[merged.length - 1];
+    if (last && (pc.start >= n - 1 || pc.start <= last.start || pc.direction === last.direction)) continue;
+    merged.push({ start: pc.start, direction: pc.direction });
+  }
 
   return merged.map((m, k) => {
     const endIndex = k + 1 < merged.length ? merged[k + 1].start - 1 : n - 1;

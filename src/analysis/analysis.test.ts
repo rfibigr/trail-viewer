@@ -117,6 +117,33 @@ describe('analyzeActivity', () => {
     expect(r.summary.avgDescentSpeed).toBeLessThan(-1400);
   });
 
+  it('a short rounded summit / valley does not become a flat sliver; boundaries sit on the extremes', () => {
+    // Climb, ~1.5 min rounded top (gentle up then gentle down), descent, ~1.5 min rounded valley, climb.
+    const r = analyzeActivity(
+      buildActivity(
+        [
+          { durationSec: 1800, speedMps: 1.5, vamMph: 1000 },
+          { durationSec: 45, speedMps: 3, vamMph: 150 },
+          { durationSec: 45, speedMps: 3, vamMph: -150 },
+          { durationSec: 1200, speedMps: 3, vamMph: -1400 },
+          { durationSec: 45, speedMps: 3, vamMph: -150 },
+          { durationSec: 45, speedMps: 3, vamMph: 150 },
+          { durationSec: 1200, speedMps: 1.5, vamMph: 1000 },
+        ],
+        { noiseM: 1, seed: 21 },
+      ),
+      opts,
+    );
+    checkInvariants(r);
+    expect(r.segments.map((s) => s.direction)).toEqual(['up', 'down', 'up']);
+    const alts = r.points.map((p) => p.altitude);
+    // Climb ends at the summit sample; descent ends at the valley sample.
+    const summit = r.segments[1].startIndex;
+    const valley = r.segments[2].startIndex;
+    expect(alts[summit]).toBe(Math.max(...alts.slice(0, valley)));
+    expect(alts[valley]).toBe(Math.min(...alts.slice(summit)));
+  });
+
   it('±3 m jitter below the threshold does not create extra segments', () => {
     const climb = analyzeActivity(buildActivity([{ durationSec: 3600, speedMps: 2, vamMph: 1000 }], { noiseM: 3, seed: 7 }), opts);
     checkInvariants(climb);
