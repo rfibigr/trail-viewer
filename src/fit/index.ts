@@ -6,6 +6,7 @@
 import { Decoder, Stream, Utils } from '@garmin/fitsdk';
 import type { EventMesg, FitMessages, RecordMesg } from '@garmin/fitsdk';
 import type { Activity, DeviceTotals, PauseInterval, TrackPoint } from '../types';
+import { extractFitFromZip, looksLikeZip } from './zip';
 
 /** Degrees per FIT semicircle (2^31 semicircles = 180 degrees). */
 const DEG_PER_SEMICIRCLE = 180 / 2 ** 31;
@@ -65,6 +66,26 @@ export async function parseFitFile(data: ArrayBuffer, fileName: string): Promise
   }
 
   return activityFromFitMessages(messages, fileName);
+}
+
+/**
+ * Parse either a plain .fit file or a Garmin Connect "Export File" .zip containing one.
+ *
+ * Zip input is detected by its signature (not the file extension). The .fit entry is extracted
+ * (the largest one if there are several) and parsed with parseFitFile; the activity name comes
+ * from `fileName` (the zip's name), not the inner `<id>_ACTIVITY.fit`.
+ */
+export async function parseActivityFile(data: ArrayBuffer, fileName: string): Promise<Activity> {
+  if (!(data instanceof ArrayBuffer) || !looksLikeZip(data)) return parseFitFile(data, fileName);
+
+  let fit: { name: string; bytes: Uint8Array };
+  try {
+    fit = await extractFitFromZip(data);
+  } catch (err) {
+    throw new Error(`Could not open "${fileName}": ${errorMessage(err)}`);
+  }
+  const buffer = fit.bytes.buffer.slice(fit.bytes.byteOffset, fit.bytes.byteOffset + fit.bytes.byteLength);
+  return parseFitFile(buffer as ArrayBuffer, fileName);
 }
 
 /**
