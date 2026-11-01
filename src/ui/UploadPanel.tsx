@@ -1,5 +1,11 @@
 import { useRef, useState, type DragEvent } from 'react';
 
+/** iOS greys out files whose type it can't map from `accept`, so touch devices get no filter (validated after picking). */
+const ACCEPT =
+  typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+    ? undefined
+    : '.fit,.zip,application/zip,application/x-zip-compressed,application/vnd.ant.fit';
+
 interface Props {
   loading: boolean;
   error: string | null;
@@ -28,7 +34,10 @@ export function UploadPanel({ loading, error, onFile, onDemo, onMock }: Props) {
           <br />
           <span className="grad-text">Own every descent.</span>
         </h1>
-        <p>Drop a .fit file from your watch to get an elevation profile coloured by vertical speed. Everything runs in your browser — nothing is uploaded.</p>
+        <p>
+          Drop the file from Garmin Connect (⚙️ → Export File), .zip or .fit, to get your elevation profile coloured by vertical
+          speed. It stays on your device: nothing is uploaded.
+        </p>
       </div>
 
       <div
@@ -60,14 +69,14 @@ export function UploadPanel({ loading, error, onFile, onDemo, onMock }: Props) {
             <svg className="drop-icon" viewBox="0 0 48 48" aria-hidden>
               <path d="M4 38 L16 20 L23 29 L31 14 L44 38 Z" />
             </svg>
-            <strong>Drop a .fit file here</strong>
-            <span className="muted">or click to choose a file</span>
+            <strong>Drop your activity here</strong>
+            <span className="muted">.zip or .fit · or tap to choose a file</span>
           </>
         )}
         <input
           ref={input}
           type="file"
-          accept=".fit,application/vnd.ant.fit,application/octet-stream"
+          accept={ACCEPT}
           hidden
           onChange={(e) => {
             const f = e.target.files?.[0];

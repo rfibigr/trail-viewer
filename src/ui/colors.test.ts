@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CLIMB_MAX,
   CLIMB_STOPS,
+  DESCENT_MAX,
   DESCENT_STOPS,
-  FLAT_COLOR,
-  cssGradient,
+  NEUTRAL,
+  cssScaleGradient,
   hexToRgb,
   mixOklab,
   oklabToRgb,
   rgbToHex,
   rgbToOklab,
   sampleStops,
+  scalePosition,
+  scaleStops,
   segmentColor,
   verticalSpeedColor,
 } from './colors';
@@ -50,7 +54,28 @@ describe('hex / oklab helpers', () => {
 describe('verticalSpeedColor', () => {
   it('returns exact stop colours at stop values', () => {
     for (const s of CLIMB_STOPS) expect(verticalSpeedColor(s.value)).toBe(s.color);
-    for (const s of DESCENT_STOPS.slice(1)) expect(verticalSpeedColor(s.value)).toBe(s.color);
+    for (const s of DESCENT_STOPS) expect(verticalSpeedColor(s.value)).toBe(s.color);
+  });
+
+  it('is the theme neutral at exactly zero', () => {
+    expect(verticalSpeedColor(0, 'light')).toBe(NEUTRAL.light);
+    expect(verticalSpeedColor(0, 'dark')).toBe(NEUTRAL.dark);
+  });
+
+  it('is continuous across zero (no hue flip between tiny climbs and tiny descents)', () => {
+    const up = rgbToOklab(hexToRgb(verticalSpeedColor(5)));
+    const down = rgbToOklab(hexToRgb(verticalSpeedColor(-5)));
+    const dE = Math.hypot(up[0] - down[0], up[1] - down[1], up[2] - down[2]);
+    expect(dE).toBeLessThan(0.02);
+  });
+
+  it('is continuous everywhere: small speed steps give small colour steps', () => {
+    let prev = rgbToOklab(hexToRgb(verticalSpeedColor(-3000)));
+    for (let v = -3000; v <= 2000; v += 10) {
+      const c = rgbToOklab(hexToRgb(verticalSpeedColor(v)));
+      expect(Math.hypot(c[0] - prev[0], c[1] - prev[1], c[2] - prev[2])).toBeLessThan(0.03);
+      prev = c;
+    }
   });
 
   it('clamps beyond the ends', () => {
@@ -58,32 +83,31 @@ describe('verticalSpeedColor', () => {
     expect(verticalSpeedColor(-9000)).toBe(DESCENT_STOPS[DESCENT_STOPS.length - 1].color);
   });
 
-  it('zero maps to the pale climb end; tiny negatives to the pale descent end', () => {
-    expect(verticalSpeedColor(0)).toBe(CLIMB_STOPS[0].color);
-    expect(verticalSpeedColor(-1e-9)).toBe(DESCENT_STOPS[0].color);
-  });
-
   it('handles non-finite input without throwing', () => {
-    expect(verticalSpeedColor(NaN)).toBe(CLIMB_STOPS[0].color);
-    expect(verticalSpeedColor(Infinity)).toBe(CLIMB_STOPS[0].color);
+    expect(verticalSpeedColor(NaN)).toBe(NEUTRAL.light);
+    expect(verticalSpeedColor(Infinity, 'dark')).toBe(NEUTRAL.dark);
   });
 
-  it('gets monotonically darker with |speed| on both scales', () => {
+  it('gets monotonically darker with |speed| beyond the pale first stops', () => {
     let prev = Infinity;
-    for (let v = 0; v <= 1600; v += 50) {
+    for (let v = CLIMB_STOPS[0].value; v <= 1600; v += 25) {
       const L = lightness(verticalSpeedColor(v));
       expect(L).toBeLessThanOrEqual(prev + 1e-3);
       prev = L;
     }
     prev = Infinity;
-    for (let v = 0; v >= -2600; v -= 50) {
-      const L = lightness(verticalSpeedColor(v - 1e-6));
+    for (let v = DESCENT_STOPS[0].value; v >= -2600; v -= 25) {
+      const L = lightness(verticalSpeedColor(v));
       expect(L).toBeLessThanOrEqual(prev + 1e-3);
       prev = L;
     }
   });
 
-  it('climbs are warm (a>0 or b>0), descents are cool (b<0)', () => {
+  it('a steeper bit inside a climb is visibly darker', () => {
+    expect(lightness(verticalSpeedColor(800)) - lightness(verticalSpeedColor(1100))).toBeGreaterThan(0.05);
+  });
+
+  it('climbs are warm (a+b>0), descents are cool (b<0)', () => {
     for (const v of [400, 800, 1200, 1500]) {
       const [, a, b] = rgbToOklab(hexToRgb(verticalSpeedColor(v)));
       expect(a + b).toBeGreaterThan(0);
@@ -94,35 +118,46 @@ describe('verticalSpeedColor', () => {
     }
   });
 
-  it('interpolates between stops', () => {
-    const c = verticalSpeedColor(475); // between 300 and 650
-    expect(c).not.toBe(CLIMB_STOPS[1].color);
-    expect(c).not.toBe(CLIMB_STOPS[2].color);
-    expect(c).toBe(mixOklab(CLIMB_STOPS[1].color, CLIMB_STOPS[2].color, 0.5));
+  it('interpolates between stops in OKLab', () => {
+    const mid = (CLIMB_STOPS[1].value + CLIMB_STOPS[2].value) / 2;
+    expect(verticalSpeedColor(mid)).toBe(mixOklab(CLIMB_STOPS[1].color, CLIMB_STOPS[2].color, 0.5));
   });
 });
 
-describe('sampleStops', () => {
-  it('works with |value| regardless of sign', () => {
-    expect(sampleStops(DESCENT_STOPS, 1100)).toBe(sampleStops(DESCENT_STOPS, -1100));
+describe('sampleStops / scaleStops', () => {
+  it('scale is sorted ascending with neutral at 0', () => {
+    const s = scaleStops('dark');
+    for (let i = 1; i < s.length; i++) expect(s[i].value).toBeGreaterThan(s[i - 1].value);
+    expect(s.find((x) => x.value === 0)?.color).toBe(NEUTRAL.dark);
+  });
+  it('sampleStops clamps', () => {
+    const s = scaleStops();
+    expect(sampleStops(s, -1e9)).toBe(s[0].color);
+    expect(sampleStops(s, 1e9)).toBe(s[s.length - 1].color);
   });
 });
 
 describe('segmentColor', () => {
-  it('uses theme grey for flat segments, regardless of speed', () => {
-    expect(segmentColor({ direction: 'flat', avgVerticalSpeed: 900 }, 'light')).toBe(FLAT_COLOR.light);
-    expect(segmentColor({ direction: 'flat', avgVerticalSpeed: -900 }, 'dark')).toBe(FLAT_COLOR.dark);
+  it('uses theme neutral for flat segments, regardless of speed', () => {
+    expect(segmentColor({ direction: 'flat', avgVerticalSpeed: 900 }, 'light')).toBe(NEUTRAL.light);
+    expect(segmentColor({ direction: 'flat', avgVerticalSpeed: -900 }, 'dark')).toBe(NEUTRAL.dark);
   });
   it('uses the vertical speed scale otherwise', () => {
     expect(segmentColor({ direction: 'up', avgVerticalSpeed: 1000 })).toBe(verticalSpeedColor(1000));
-    expect(segmentColor({ direction: 'down', avgVerticalSpeed: -1800 })).toBe(verticalSpeedColor(-1800));
+    expect(segmentColor({ direction: 'down', avgVerticalSpeed: -1850 })).toBe(verticalSpeedColor(-1850));
   });
 });
 
-describe('cssGradient', () => {
-  it('starts and ends on the scale endpoints', () => {
-    const g = cssGradient(CLIMB_STOPS, 'to right', 4);
-    expect(g.startsWith('linear-gradient(to right, #fff3b0 0.0%')).toBe(true);
+describe('legend helpers', () => {
+  it('cssScaleGradient runs from the descent end to the climb end', () => {
+    const g = cssScaleGradient('light', 8);
+    expect(g.startsWith(`linear-gradient(to right, ${DESCENT_STOPS[DESCENT_STOPS.length - 1].color} 0.0%`)).toBe(true);
     expect(g.endsWith(`${CLIMB_STOPS[CLIMB_STOPS.length - 1].color} 100.0%)`)).toBe(true);
+  });
+  it('scalePosition maps the ends and zero', () => {
+    expect(scalePosition(DESCENT_MAX)).toBe(0);
+    expect(scalePosition(CLIMB_MAX)).toBe(1);
+    expect(scalePosition(0)).toBeCloseTo(-DESCENT_MAX / (CLIMB_MAX - DESCENT_MAX));
+    expect(scalePosition(99999)).toBe(1);
   });
 });

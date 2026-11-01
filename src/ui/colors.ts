@@ -1,10 +1,12 @@
 /**
  * Colour mapping for vertical speed (m/h).
  *
- * Climbs use a warm sequential scale (pale yellow -> orange -> red -> deep crimson),
- * descents a cool one (pale cyan -> blue -> deep indigo), flat segments a neutral grey.
+ * One continuous diverging scale with a neutral grey at 0 m/h:
+ *   descents (cool): deep indigo <- blue <- pale cyan <- neutral
+ *   climbs   (warm): neutral -> pale yellow -> orange -> red -> deep crimson
+ * Crossing zero therefore passes through grey instead of flipping hue.
  * Interpolation happens in OKLab so steps look perceptually even; values beyond the
- * last stop are clamped.
+ * end stops are clamped.
  */
 import type { Direction } from '../types';
 
@@ -17,32 +19,40 @@ export interface ColorStop {
 
 export type Theme = 'light' | 'dark';
 
-/** 0 -> 1500+ m/h. Values ascending. */
+/** Colour at 0 m/h (and for 'flat' segments). Darker in dark mode so flat ground stays recessive. */
+export const NEUTRAL: Record<Theme, string> = {
+  light: '#d5d4cf',
+  dark: '#7d828c',
+};
+
+/** Climb arm, ascending, excluding the neutral 0 stop. Clamps at 1500 m/h. */
 export const CLIMB_STOPS: readonly ColorStop[] = [
-  { value: 0, color: '#fff3b0' },
-  { value: 300, color: '#fed46a' },
-  { value: 650, color: '#fb9b38' },
+  { value: 150, color: '#fdeb9a' },
+  { value: 400, color: '#fdcb5c' },
+  { value: 700, color: '#fb9b38' },
   { value: 1000, color: '#e8532a' },
   { value: 1250, color: '#c21f2a' },
   { value: 1500, color: '#7a0b22' },
 ];
 
-/** 0 -> -2500 m/h. Values descending (magnitude ascending). */
+/** Descent arm, by increasing magnitude, excluding the neutral 0 stop. Clamps at -2500 m/h. */
 export const DESCENT_STOPS: readonly ColorStop[] = [
-  { value: 0, color: '#d3f3f6' },
-  { value: -500, color: '#8fd2e6' },
-  { value: -1100, color: '#4699d6' },
-  { value: -1800, color: '#2f58b8' },
+  { value: -200, color: '#c4ebf3' },
+  { value: -600, color: '#86cbe4' },
+  { value: -1200, color: '#4392d3' },
+  { value: -1850, color: '#2f55b5' },
   { value: -2500, color: '#2a1a74' },
 ];
 
-export const FLAT_COLOR: Record<Theme, string> = {
-  light: '#b7bcc5',
-  dark: '#5f6673',
-};
-
 export const CLIMB_MAX = CLIMB_STOPS[CLIMB_STOPS.length - 1].value;
 export const DESCENT_MAX = DESCENT_STOPS[DESCENT_STOPS.length - 1].value;
+
+/** Full scale for a theme, sorted by ascending value (DESCENT_MAX .. 0 .. CLIMB_MAX). */
+export function scaleStops(theme: Theme = 'light'): ColorStop[] {
+  return [...DESCENT_STOPS].reverse().concat([{ value: 0, color: NEUTRAL[theme] }], CLIMB_STOPS);
+}
+
+const scaleCache: Partial<Record<Theme, ColorStop[]>> = {};
 
 // ---------------------------------------------------------------------------
 // Colour-space helpers (sRGB <-> OKLab)
@@ -104,24 +114,24 @@ export function mixOklab(from: string, to: string, t: number): string {
   return rgbToHex(oklabToRgb([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]));
 }
 
-/** Sample a stop list (ordered by increasing |value|) at |v|, clamping at both ends. */
+/** Sample stops sorted by ascending value at v, interpolating in OKLab and clamping at both ends. */
 export function sampleStops(stops: readonly ColorStop[], v: number): string {
-  const x = Math.abs(v);
-  if (!(x > Math.abs(stops[0].value))) return stops[0].color; // also catches NaN
+  if (!(v > stops[0].value)) return stops[0].color; // also catches NaN
   for (let i = 1; i < stops.length; i++) {
-    const hi = Math.abs(stops[i].value);
-    if (x <= hi) {
-      const lo = Math.abs(stops[i - 1].value);
-      return mixOklab(stops[i - 1].color, stops[i].color, (x - lo) / (hi - lo));
+    const hi = stops[i].value;
+    if (v <= hi) {
+      const lo = stops[i - 1].value;
+      return mixOklab(stops[i - 1].color, stops[i].color, (v - lo) / (hi - lo));
     }
   }
   return stops[stops.length - 1].color;
 }
 
-/** Continuous colour for a vertical speed in m/h (positive = climbing). */
-export function verticalSpeedColor(vs: number): string {
-  if (!Number.isFinite(vs)) return CLIMB_STOPS[0].color;
-  return vs >= 0 ? sampleStops(CLIMB_STOPS, vs) : sampleStops(DESCENT_STOPS, vs);
+/** Continuous colour for a vertical speed in m/h (positive = climbing). Non-finite input -> neutral. */
+export function verticalSpeedColor(vs: number, theme: Theme = 'light'): string {
+  if (!Number.isFinite(vs)) return NEUTRAL[theme];
+  const stops = (scaleCache[theme] ??= scaleStops(theme));
+  return sampleStops(stops, vs);
 }
 
 /** Colour for a segment: flat segments are neutral grey, others follow their average vertical speed. */
@@ -129,17 +139,21 @@ export function segmentColor(
   segment: { direction: Direction; avgVerticalSpeed: number },
   theme: Theme = 'light',
 ): string {
-  if (segment.direction === 'flat') return FLAT_COLOR[theme];
-  return verticalSpeedColor(segment.avgVerticalSpeed);
+  if (segment.direction === 'flat') return NEUTRAL[theme];
+  return verticalSpeedColor(segment.avgVerticalSpeed, theme);
 }
 
-/** CSS linear-gradient for a scale, from 0 to its last stop, sampled densely in OKLab. */
-export function cssGradient(stops: readonly ColorStop[], direction = 'to right', samples = 12): string {
-  const max = Math.abs(stops[stops.length - 1].value);
+/** CSS linear-gradient for the whole scale (DESCENT_MAX on the left, CLIMB_MAX on the right), sampled in OKLab. */
+export function cssScaleGradient(theme: Theme = 'light', samples = 40): string {
   const parts: string[] = [];
   for (let i = 0; i <= samples; i++) {
-    const v = (max * i) / samples;
-    parts.push(`${sampleStops(stops, v)} ${((i / samples) * 100).toFixed(1)}%`);
+    const v = DESCENT_MAX + ((CLIMB_MAX - DESCENT_MAX) * i) / samples;
+    parts.push(`${verticalSpeedColor(v, theme)} ${((i / samples) * 100).toFixed(1)}%`);
   }
-  return `linear-gradient(${direction}, ${parts.join(', ')})`;
+  return `linear-gradient(to right, ${parts.join(', ')})`;
+}
+
+/** Position (0..1) of a vertical speed along the legend bar. */
+export function scalePosition(vs: number): number {
+  return Math.min(1, Math.max(0, (vs - DESCENT_MAX) / (CLIMB_MAX - DESCENT_MAX)));
 }

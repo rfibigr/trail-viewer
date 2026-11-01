@@ -1,19 +1,25 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_ANALYSIS_OPTIONS, type AnalysisOptions, type AnalysisResult } from '../types';
-import { ElevationChart } from './ElevationChart';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DEFAULT_ANALYSIS_OPTIONS, type AnalysisResult } from '../types';
+import { ElevationChart, type IndexRange } from './ElevationChart';
 import { Legend } from './Legend';
 import { errorMessage, loadDemo, loadFitFile, loadMock, type Source } from './pipeline';
-import type { ColorMode, XMode } from './profile';
+import type { XMode } from './profile';
+import { rangeStats } from './rangeStats';
+import { RangeStatsBar } from './RangeStatsBar';
 import { SegmentTable } from './SegmentTable';
-import { SettingsPanel } from './SettingsPanel';
 import { SummaryBar } from './SummaryBar';
 import { UploadPanel } from './UploadPanel';
 import { useTheme } from './useTheme';
 import './styles.css';
 
 const DEV = import.meta.env.DEV;
+/** Dev-only mock button, shown with ?dev so it stays out of screenshots. */
+const SHOW_MOCK = DEV && typeof location !== 'undefined' && new URLSearchParams(location.search).has('dev');
 
-type Analysis = { result: AnalysisResult; error: null } | { result: AnalysisResult | null; error: string };
+interface Loaded {
+  source: Source;
+  result: AnalysisResult;
+}
 
 function Toggle<T extends string>({ label, value, options, onChange }: {
   label: string;
@@ -37,56 +43,54 @@ function Toggle<T extends string>({ label, value, options, onChange }: {
 
 export function App() {
   const theme = useTheme();
-  const [source, setSource] = useState<Source | null>(null);
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [options, setOptions] = useState<AnalysisOptions>(DEFAULT_ANALYSIS_OPTIONS);
   const [xMode, setXMode] = useState<XMode>('distance');
-  const [colorMode, setColorMode] = useState<ColorMode>('segment');
   const [tableHover, setTableHover] = useState<number | null>(null);
   const [chartHover, setChartHover] = useState<number | null>(null);
+  const [selection, setSelection] = useState<IndexRange | null>(null);
 
-  const deferredOptions = useDeferredValue(options);
-  const lastGood = useRef<AnalysisResult | null>(null);
-
-  const analysis = useMemo<Analysis | null>(() => {
-    if (!source) return null;
+  const open = useCallback(async (load: () => Promise<Source>) => {
+    setLoading(true);
+    setLoadError(null);
     try {
-      const result = source.analyze(deferredOptions);
-      lastGood.current = result;
-      return { result, error: null };
+      const source = await load();
+      const result = source.analyze(DEFAULT_ANALYSIS_OPTIONS);
+      setTableHover(null);
+      setChartHover(null);
+      setSelection(null);
+      setLoaded({ source, result });
     } catch (e) {
-      return { result: lastGood.current, error: errorMessage(e) };
+      setLoadError(errorMessage(e));
+    } finally {
+      setLoading(false);
     }
-  }, [source, deferredOptions]);
-
-  const open = useCallback(
-    async (load: () => Promise<Source>) => {
-      setLoading(true);
-      setLoadError(null);
-      try {
-        const src = await load();
-        const first = src.analyze(options); // fail on the upload screen, not in an empty viewer
-        lastGood.current = first;
-        setTableHover(null);
-        setChartHover(null);
-        setSource(src);
-      } catch (e) {
-        setLoadError(errorMessage(e));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [options],
-  );
-
-  // ?mock in the URL (dev only) jumps straight to the mock result, handy for screenshots.
-  useEffect(() => {
-    if (DEV && new URLSearchParams(location.search).has('mock')) void open(loadMock);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const result = analysis?.result ?? null;
+  // ?mock (dev only) jumps straight to the mock result; ?demo loads the demo file. Handy for screenshots.
+  const autoloaded = useRef(false);
+  useEffect(() => {
+    if (autoloaded.current) return; // StrictMode runs effects twice in dev
+    autoloaded.current = true;
+    const q = new URLSearchParams(location.search);
+    if (DEV && q.has('mock')) void open(loadMock);
+    else if (q.has('demo')) void open(loadDemo);
+  }, [open]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelection(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const stats = useMemo(
+    () => (loaded && selection ? rangeStats(loaded.result.points, selection[0], selection[1]) : null),
+    [loaded, selection],
+  );
+
+  const source = loaded?.source;
+  const result = loaded?.result;
 
   return (
     <div className="app">
@@ -107,51 +111,41 @@ export function App() {
                 </span>
               )}
             </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSource(null)}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLoaded(null)}>
               Open file
             </button>
           </>
         )}
       </header>
 
-      {!source || !result ? (
+      {!result ? (
         <UploadPanel
           loading={loading}
           error={loadError}
           onFile={(f) => open(() => loadFitFile(f))}
           onDemo={() => open(loadDemo)}
-          onMock={DEV ? () => open(loadMock) : undefined}
+          onMock={SHOW_MOCK ? () => open(loadMock) : undefined}
         />
       ) : (
         <main className="viewer">
-          {analysis?.error && (
-            <div className="error" role="alert">
-              <strong>Analysis failed with these settings.</strong>
-              <span>{analysis.error} — showing the last successful result.</span>
-            </div>
-          )}
           <SummaryBar summary={result.summary} />
-          <div className="layout">
-            <section className={`card chart-card${options !== deferredOptions ? ' stale' : ''}`} aria-labelledby="chart-title">
-              <div className="card-head chart-head">
-                <h2 id="chart-title">Elevation profile</h2>
-                <div className="chart-controls">
-                  <Toggle label="X axis" value={xMode} onChange={setXMode} options={[['distance', 'Distance'], ['time', 'Moving time']]} />
-                  <Toggle label="Colour" value={colorMode} onChange={setColorMode} options={[['segment', 'Segment avg'], ['point', 'Rolling']]} />
-                </div>
-              </div>
-              <ElevationChart
-                result={result}
-                xMode={xMode}
-                colorMode={colorMode}
-                theme={theme}
-                highlightSegment={tableHover ?? chartHover}
-                onHoverSegment={setChartHover}
-              />
-              <Legend theme={theme} />
-            </section>
-            <SettingsPanel options={options} onChange={setOptions} />
-          </div>
+          <section className="card chart-card" aria-labelledby="chart-title">
+            <div className="card-head chart-head">
+              <h2 id="chart-title">Elevation &amp; vertical speed</h2>
+              <Toggle label="X axis" value={xMode} onChange={setXMode} options={[['distance', 'Distance'], ['time', 'Moving time']]} />
+            </div>
+            <RangeStatsBar stats={stats} theme={theme} onClear={() => setSelection(null)} />
+            <ElevationChart
+              result={result}
+              xMode={xMode}
+              theme={theme}
+              highlightSegment={tableHover ?? chartHover}
+              onHoverSegment={setChartHover}
+              selection={selection}
+              onSelect={setSelection}
+            />
+            <Legend theme={theme} />
+          </section>
           <SegmentTable segments={result.segments} theme={theme} activeIndex={tableHover ?? chartHover} onHover={setTableHover} />
         </main>
       )}

@@ -18,6 +18,22 @@ async function parseFit(buffer: ArrayBuffer, fileName: string): Promise<Activity
   return parseFitFile(buffer, fileName);
 }
 
+/** User files: .fit or Garmin Connect's export .zip (the parser sniffs the bytes). */
+async function parseUserFile(buffer: ArrayBuffer, fileName: string): Promise<Activity> {
+  const { parseActivityFile } = await import('../fit');
+  return parseActivityFile(buffer, fileName);
+}
+
+/** Accepts .fit, .zip, or no extension (some phone pickers drop it); rejects other known formats early. */
+export function checkFileName(name: string): string | null {
+  const ext = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase();
+  if (!ext || ext === 'fit' || ext === 'zip') return null;
+  if (ext === 'gpx' || ext === 'tcx') {
+    return `“${name}” is a ${ext.toUpperCase()} file. Trail Viewer needs the original FIT: in Garmin Connect use ⚙️ → Export File (.zip or .fit).`;
+  }
+  return `“${name}” isn’t a .fit or .zip file. In Garmin Connect use ⚙️ → Export File.`;
+}
+
 function fromActivity(activity: Activity): Source {
   return {
     name: activity.name,
@@ -28,11 +44,10 @@ function fromActivity(activity: Activity): Source {
 }
 
 export async function loadFitFile(file: File): Promise<Source> {
-  if (!/\.fit$/i.test(file.name)) {
-    throw new Error(`“${file.name}” doesn’t look like a .fit file. Export the original FIT file from Garmin Connect, Strava, Coros or Suunto.`);
-  }
+  const problem = checkFileName(file.name);
+  if (problem) throw new Error(problem);
   const buffer = await file.arrayBuffer();
-  return fromActivity(await parseFit(buffer, file.name));
+  return fromActivity(await parseUserFile(buffer, file.name));
 }
 
 // Lazy + tolerant of the module not existing yet, so the demo is code-split out of the main bundle.
