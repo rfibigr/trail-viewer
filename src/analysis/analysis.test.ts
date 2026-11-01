@@ -277,6 +277,7 @@ describe('analyzeActivity', () => {
       startTime: new Date(0),
       points,
       pauses,
+      deviceTotals: null,
     });
     const pt = (t: number, distance: number, altitude: number | null) => ({ t, distance, altitude, lat: null, lon: null, heartRate: null });
 
@@ -337,6 +338,71 @@ describe('analyzeActivity', () => {
       const r = analyzeActivity(a, opts);
       checkInvariants(r);
       expect(r.summary.movingTime).toBeCloseTo(1000 - 150 - 100, 6);
+    });
+  });
+
+  describe('device totals', () => {
+    const legs = [
+      { durationSec: 1800, speedMps: 2, vamMph: 1000 },
+      { durationSec: 600, speedMps: 0, vamMph: 0, paused: true },
+      { durationSec: 1200, speedMps: 3, vamMph: -1500 },
+    ];
+
+    it('summary uses device ascent/descent/distance/elapsed; movingTime, segments and speeds stay computed', () => {
+      const computed = analyzeActivity(buildActivity(legs, { noiseM: 2, seed: 30 }), opts);
+      const a = buildActivity(legs, { noiseM: 2, seed: 30 });
+      a.deviceTotals = { totalAscent: 512, totalDescent: 498, totalDistance: 7250, timerTime: 3000, elapsedTime: 3601 };
+      const r = analyzeActivity(a, opts);
+      checkInvariants(r);
+      expect(r.summary.totalGain).toBe(512);
+      expect(r.summary.totalLoss).toBe(498);
+      expect(r.summary.totalDistance).toBe(7250);
+      expect(r.summary.elapsedTime).toBe(3601);
+      expect(r.summary.movingTime).toBe(computed.summary.movingTime);
+      expect(r.summary.avgClimbSpeed).toBe(computed.summary.avgClimbSpeed);
+      expect(r.summary.avgDescentSpeed).toBe(computed.summary.avgDescentSpeed);
+      expect(r.segments).toEqual(computed.segments);
+      expect(r.points).toEqual(computed.points);
+    });
+
+    it('device totals do not change with the smoothing setting', () => {
+      const a = buildActivity(legs, { noiseM: 3, seed: 31 });
+      a.deviceTotals = { totalAscent: 500, totalDescent: 500, totalDistance: null, timerTime: null, elapsedTime: null };
+      for (const w of [5, 30, 120]) {
+        const r = analyzeActivity(a, { ...opts, smoothingWindowSec: w });
+        expect(r.summary.totalGain).toBe(500);
+        expect(r.summary.totalLoss).toBe(500);
+      }
+    });
+
+    it('falls back per field to computed values when null (or deviceTotals is null)', () => {
+      const computed = analyzeActivity(buildActivity(legs), opts).summary;
+      const a = buildActivity(legs);
+      a.deviceTotals = { totalAscent: 505, totalDescent: null, totalDistance: null, timerTime: null, elapsedTime: null };
+      const r = analyzeActivity(a, opts).summary;
+      expect(r.totalGain).toBe(505);
+      expect(r.totalLoss).toBe(computed.totalLoss);
+      expect(r.totalDistance).toBe(computed.totalDistance);
+      expect(r.elapsedTime).toBe(computed.elapsedTime);
+      expect(computed.totalDistance).toBe(7200);
+      expect(computed.elapsedTime).toBe(3600);
+      expect(computed.totalGain).toBeGreaterThan(495);
+      expect(computed.totalLoss).toBeGreaterThan(495);
+    });
+
+    it('applies to an empty activity too', () => {
+      const r = analyzeActivity(
+        {
+          name: 'x',
+          sport: null,
+          startTime: new Date(0),
+          points: [],
+          pauses: [],
+          deviceTotals: { totalAscent: 10, totalDescent: 12, totalDistance: 100, timerTime: 60, elapsedTime: 70 },
+        },
+        opts,
+      );
+      expect(r.summary).toMatchObject({ totalGain: 10, totalLoss: 12, totalDistance: 100, elapsedTime: 70, movingTime: 0 });
     });
   });
 

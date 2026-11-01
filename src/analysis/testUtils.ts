@@ -57,7 +57,7 @@ export function buildActivity(legs: Leg[], opts: BuildOptions = {}): Activity {
       push();
     }
   }
-  return { name: 'synthetic', sport: 'running', startTime: new Date(0), points, pauses };
+  return { name: 'synthetic', sport: 'running', startTime: new Date(0), points, pauses, deviceTotals: null };
 }
 
 export function median(xs: number[]): number {

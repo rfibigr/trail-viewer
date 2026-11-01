@@ -30,6 +30,13 @@ const PROFILE: ReadonlyArray<readonly [number, number]> = [
   [18000, 1035],
 ];
 const COURSE_LENGTH = PROFILE[PROFILE.length - 1][0];
+/** True D+ / D- of the course profile, metres. */
+export const SAMPLE_TOTAL_ASCENT = Math.round(
+  PROFILE.slice(1).reduce((acc, [, a], i) => acc + Math.max(0, a - PROFILE[i][1]), 0),
+);
+export const SAMPLE_TOTAL_DESCENT = Math.round(
+  PROFILE.slice(1).reduce((acc, [, a], i) => acc + Math.max(0, PROFILE[i][1] - a), 0),
+);
 /** Distance at which the runner stops at the aid station, and for how long (s). */
 const AID_STATION_DISTANCE = 4750;
 const AID_STATION_STOP_S = 240;
@@ -127,6 +134,10 @@ export function buildSampleFit(): Uint8Array {
     timerEvents,
     sport: 'running',
     subSport: 'trail',
+    // What a Garmin would report: the course's true climb/descent, whole metres
+    // (its own filtering removes the sensor wobble we add to the records).
+    totalAscent: SAMPLE_TOTAL_ASCENT,
+    totalDescent: SAMPLE_TOTAL_DESCENT,
   });
 }
 

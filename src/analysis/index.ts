@@ -3,7 +3,7 @@ import { cleanPoints } from './clean';
 import { computeMovingTime } from './moving';
 import { rollingVerticalSpeed, smoothByTime } from './smooth';
 import { buildSegments } from './segment';
-import { emptySummary, summarize } from './summary';
+import { applyDeviceTotals, emptySummary, summarize } from './summary';
 
 const finiteOr = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback);
 
@@ -13,6 +13,7 @@ const finiteOr = (v: number, fallback: number) => (Number.isFinite(v) ? v : fall
  * Pipeline: clean (sort/dedupe time, interpolate short altitude gaps) -> moving time (timer pauses +
  * auto-detected stops removed) -> time-based altitude smoothing on the moving clock -> centred rolling
  * vertical speed -> hysteresis segmentation (up/down/flat, merged) -> segment stats and summary.
+ * Summary D+/D-/distance/elapsed come from activity.deviceTotals when present (see applyDeviceTotals).
  * See segment.ts for the segment contiguity convention.
  *
  * Throws if the activity has points but no altitude at all.
@@ -20,7 +21,7 @@ const finiteOr = (v: number, fallback: number) => (Number.isFinite(v) ? v : fall
 export function analyzeActivity(activity: Activity, options: AnalysisOptions): AnalysisResult {
   const track = cleanPoints(activity.points);
   const n = track.t.length;
-  if (n === 0) return { points: [], segments: [], summary: emptySummary() };
+  if (n === 0) return { points: [], segments: [], summary: applyDeviceTotals(emptySummary(), activity.deviceTotals) };
 
   const smoothingWindowSec = Math.max(0, finiteOr(options.smoothingWindowSec, 0));
   const verticalSpeedWindowSec = Math.max(0, finiteOr(options.verticalSpeedWindowSec, 0));
@@ -46,5 +47,6 @@ export function analyzeActivity(activity: Activity, options: AnalysisOptions): A
     };
   }
 
-  return { points, segments, summary: summarize(segments, track.t, movingTime, track.distance) };
+  const computed = summarize(segments, track.t, movingTime, track.distance);
+  return { points, segments, summary: applyDeviceTotals(computed, activity.deviceTotals) };
 }

@@ -32,6 +32,24 @@ export interface Activity {
   points: TrackPoint[];
   /** Timer stop/start pairs from the FIT file. Empty if none. */
   pauses: PauseInterval[];
+  /**
+   * Totals computed by the device / Garmin (FIT session message), shown as-is so the
+   * numbers match Garmin Connect. Each field is null when absent from the file.
+   */
+  deviceTotals: DeviceTotals | null;
+}
+
+export interface DeviceTotals {
+  /** metres */
+  totalAscent: number | null;
+  /** metres, positive */
+  totalDescent: number | null;
+  /** metres */
+  totalDistance: number | null;
+  /** Timer time in seconds (excludes pauses) */
+  timerTime: number | null;
+  /** Elapsed time in seconds */
+  elapsedTime: number | null;
 }
 
 export type Direction = 'up' | 'down' | 'flat';

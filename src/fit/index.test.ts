@@ -8,7 +8,7 @@ import {
   semicirclesToDegrees,
 } from './index';
 import { degreesToSemicircles, encodeActivity } from './encode';
-import { buildSampleFit, SAMPLE_FIT_START } from './sampleFit';
+import { buildSampleFit, SAMPLE_FIT_START, SAMPLE_TOTAL_ASCENT, SAMPLE_TOTAL_DESCENT } from './sampleFit';
 import {
   buildClimbDescentFit,
   fixtureAltitude,
@@ -66,6 +66,22 @@ describe('parseFitFile – climb/descent fixture', () => {
 
     const noSession = await parse(buildClimbDescentFit({ sport: null }), 'x.fit');
     expect(noSession.sport).toBeNull();
+  });
+
+  it('extracts device totals from the session message', async () => {
+    const a = await parse(buildClimbDescentFit());
+    expect(a.deviceTotals).toEqual({
+      totalAscent: 600,
+      totalDescent: 500,
+      totalDistance: (3599 - 300) * FIXTURE_SPEED,
+      timerTime: 3599 - (FIXTURE_PAUSE.end - FIXTURE_PAUSE.start),
+      elapsedTime: 3599,
+    });
+  });
+
+  it('has null device totals without a session message', async () => {
+    const a = await parse(buildClimbDescentFit({ sport: null }));
+    expect(a.deviceTotals).toBeNull();
   });
 
   it('converts positions from semicircles to degrees', async () => {
@@ -156,6 +172,29 @@ describe('activityFromFitMessages (decoded messages)', () => {
   });
 });
 
+describe('activityFromFitMessages – device totals', () => {
+  it('sums totals over several sessions; a field missing everywhere is null', () => {
+    const messages: FitMessages = {
+      recordMesgs: [{ timestamp: FIXTURE_START }],
+      sessionMesgs: [
+        { totalAscent: 300, totalDescent: 100, totalDistance: 5000, totalTimerTime: 1800, totalElapsedTime: 1900 },
+        { totalAscent: 200, totalDistance: 4000, totalTimerTime: 1500, totalElapsedTime: 1500 },
+      ],
+    };
+    expect(activityFromFitMessages(messages, 'a.fit').deviceTotals).toEqual({
+      totalAscent: 500,
+      totalDescent: 100,
+      totalDistance: 9000,
+      timerTime: 3300,
+      elapsedTime: 3400,
+    });
+    const partial = activityFromFitMessages({ ...messages, sessionMesgs: [{ totalDistance: 10 }] }, 'a.fit');
+    expect(partial.deviceTotals).toEqual({
+      totalAscent: null, totalDescent: null, totalDistance: 10, timerTime: null, elapsedTime: null,
+    });
+  });
+});
+
 describe('helpers', () => {
   it('semicirclesToDegrees', () => {
     expect(semicirclesToDegrees(2 ** 30)).toBe(90);
@@ -232,6 +271,18 @@ describe('buildSampleFit', () => {
     }
     expect(gain).toBeGreaterThan(1400);
     expect(gain).toBeLessThan(1700);
+
+    // Device totals: whole-metre course D+/D-, plus distance and times consistent with the records.
+    expect(SAMPLE_TOTAL_ASCENT).toBe(1500);
+    expect(SAMPLE_TOTAL_DESCENT).toBe(1500);
+    const pauseLen = a.pauses[0].end - a.pauses[0].start;
+    expect(a.deviceTotals).toEqual({
+      totalAscent: SAMPLE_TOTAL_ASCENT,
+      totalDescent: SAMPLE_TOTAL_DESCENT,
+      totalDistance: last.distance,
+      timerTime: last.t - pauseLen,
+      elapsedTime: last.t,
+    });
 
     expect(a.pauses).toHaveLength(1);
     expect(a.pauses[0].end - a.pauses[0].start).toBeGreaterThanOrEqual(200);

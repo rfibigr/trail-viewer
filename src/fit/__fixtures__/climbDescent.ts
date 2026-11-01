@@ -67,7 +67,10 @@ export function buildClimbDescentFit(opts: ClimbDescentOptions = {}): Uint8Array
   ];
   if (trailingStop) timerEvents.push({ t: 3599, eventType: 'stopAll' });
 
-  return encodeActivity({ startTime: FIXTURE_START, records, timerEvents, sport: sport ?? undefined });
+  return encodeActivity({ startTime: FIXTURE_START, records, timerEvents, sport: sport ?? undefined,
+    totalAscent: 600,
+    totalDescent: 500,
+  });
 }
 
 /** Copy a Uint8Array into a standalone ArrayBuffer (what the browser File API gives you). */

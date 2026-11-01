@@ -3,7 +3,7 @@
  * Used by the demo activity (sampleFit.ts) and by tests. Browser-safe.
  */
 import { Encoder, Profile } from '@garmin/fitsdk';
-import type { ActivityMesg, EventMesg, FileIdMesg, RecordMesg, SessionMesg } from '@garmin/fitsdk';
+import type { ActivityMesg, EventMesg, FileIdMesg, LapMesg, RecordMesg, SessionMesg } from '@garmin/fitsdk';
 
 const SEMICIRCLES_PER_DEG = 2 ** 31 / 180;
 
@@ -36,6 +36,9 @@ export interface EncodeActivityInput {
   /** e.g. 'running'. Omit to write no session message. */
   sport?: string;
   subSport?: string;
+  /** Device-computed totals (metres, whole numbers) written to the lap and session. */
+  totalAscent?: number;
+  totalDescent?: number;
 }
 
 export function encodeActivity(input: EncodeActivityInput): Uint8Array {
@@ -87,19 +90,32 @@ export function encodeActivity(input: EncodeActivityInput): Uint8Array {
     const last = records[records.length - 1];
     const elapsed = last.t - first.t;
     const paused = pausedSeconds(timerEvents);
-    enc.onMesg(Profile.MesgNum.SESSION, <SessionMesg>{
-      messageIndex: 0,
+    // Totals shared by the single lap and the session (as a device writes them).
+    const totals = {
       timestamp: at(last.t),
       startTime: at(first.t),
-      event: 'session',
-      eventType: 'stop',
-      sport: input.sport,
-      subSport: input.subSport ?? 'generic',
       totalElapsedTime: elapsed,
       totalTimerTime: Math.max(0, elapsed - paused),
       totalDistance: last.distance ?? 0,
+      ...(input.totalAscent !== undefined && { totalAscent: Math.round(input.totalAscent) }),
+      ...(input.totalDescent !== undefined && { totalDescent: Math.round(input.totalDescent) }),
+      sport: input.sport,
+      subSport: input.subSport ?? 'generic',
+    };
+    enc.onMesg(Profile.MesgNum.LAP, <LapMesg>{
+      messageIndex: 0,
+      event: 'lap',
+      eventType: 'stop',
+      lapTrigger: 'sessionEnd',
+      ...totals,
+    });
+    enc.onMesg(Profile.MesgNum.SESSION, <SessionMesg>{
+      messageIndex: 0,
+      event: 'session',
+      eventType: 'stop',
       firstLapIndex: 0,
       numLaps: 1,
+      ...totals,
     });
     enc.onMesg(Profile.MesgNum.ACTIVITY, <ActivityMesg>{
       timestamp: at(last.t),

@@ -5,7 +5,7 @@
  */
 import { Decoder, Stream, Utils } from '@garmin/fitsdk';
 import type { EventMesg, FitMessages, RecordMesg } from '@garmin/fitsdk';
-import type { Activity, PauseInterval, TrackPoint } from '../types';
+import type { Activity, DeviceTotals, PauseInterval, TrackPoint } from '../types';
 
 /** Degrees per FIT semicircle (2^31 semicircles = 180 degrees). */
 const DEG_PER_SEMICIRCLE = 180 / 2 ** 31;
@@ -93,6 +93,27 @@ export function activityFromFitMessages(messages: FitMessages, fileName: string)
     startTime: new Date(startMs),
     points,
     pauses: extractPauses(messages.eventMesgs ?? [], startMs, lastT),
+    deviceTotals: extractDeviceTotals(messages),
+  };
+}
+
+/**
+ * Device-computed totals from the session message(s), summed over sessions (multisport files).
+ * Each field is null when no session carries it; the whole object is null without any session.
+ */
+function extractDeviceTotals(messages: FitMessages): DeviceTotals | null {
+  const sessions = messages.sessionMesgs ?? [];
+  if (sessions.length === 0) return null;
+  const sum = (values: unknown[]): number | null => {
+    const nums = values.filter(isFiniteNumber);
+    return nums.length === 0 ? null : nums.reduce((a, b) => a + b, 0);
+  };
+  return {
+    totalAscent: sum(sessions.map((s) => s.totalAscent)),
+    totalDescent: sum(sessions.map((s) => s.totalDescent)),
+    totalDistance: sum(sessions.map((s) => s.totalDistance)),
+    timerTime: sum(sessions.map((s) => s.totalTimerTime)),
+    elapsedTime: sum(sessions.map((s) => s.totalElapsedTime)),
   };
 }
 
